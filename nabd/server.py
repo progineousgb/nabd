@@ -38,7 +38,7 @@ def check_url(url, timeout=TIMEOUT):
             exc.close()
         except OSError:
             pass
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - any failure means the target is down
         error = str(exc)[:300]
         up = False
     elapsed = int((time.perf_counter() - start) * 1000)
@@ -50,12 +50,24 @@ def check_url(url, timeout=TIMEOUT):
     }
 
 
+class _HttpOnlyRedirects(urllib.request.HTTPRedirectHandler):
+    """Follow a redirect only when it points to http or https."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        scheme = urllib.parse.urlparse(urllib.parse.urljoin(req.full_url, newurl)).scheme.lower()
+        if scheme not in {"http", "https"}:
+            raise urllib.error.HTTPError(
+                req.full_url, code, f"redirect to {scheme or 'unknown'}: refused", headers, fp
+            )
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def _open(req, timeout, url):
     host = (urllib.parse.urlparse(url).hostname or "").lower()
+    handlers = [_HttpOnlyRedirects()]
     if host in {"127.0.0.1", "localhost", "::1"}:
-        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-        return opener.open(req, timeout=timeout)
-    return urllib.request.urlopen(req, timeout=timeout)
+        handlers.append(urllib.request.ProxyHandler({}))
+    return urllib.request.build_opener(*handlers).open(req, timeout=timeout)
 
 
 class _Server(ThreadingHTTPServer):
@@ -342,7 +354,13 @@ class Nabd:
                 self.send_response(303)
                 self.send_header("Location", "/")
                 self.send_header("Content-Length", "0")
+                self._security_headers()
                 self.end_headers()
+
+            def _security_headers(self):
+                self.send_header("X-Frame-Options", "DENY")
+                self.send_header("Content-Security-Policy", "frame-ancestors 'none'")
+                self.send_header("X-Content-Type-Options", "nosniff")
 
             def _send(self, code, body, content_type="text/plain; charset=utf-8"):
                 self.send_response(code)
@@ -350,6 +368,7 @@ class Nabd:
                     self.send_header("Content-Type", content_type)
                 self.send_header("Content-Length", str(len(body)))
                 self.send_header("Cache-Control", "no-store")
+                self._security_headers()
                 self.end_headers()
                 if body and self.command != "HEAD":
                     self.wfile.write(body)
@@ -384,9 +403,7 @@ def _cross_site(headers):
         return False
     host = (headers.get("Host") or "").strip().lower()
     parsed = urllib.parse.urlparse(origin)
-    if parsed.scheme != "http" or not host or parsed.netloc.lower() != host:
-        return True
-    return False
+    return parsed.scheme != "http" or not host or parsed.netloc.lower() != host
 
 
 def render_page(rows):

@@ -1,6 +1,6 @@
 # nabd
 
-nabd is a local uptime monitor for a few URLs. One process checks each URL on an interval, stores the result in a SQLite file, and serves a status page on your machine.
+nabd is a local uptime monitor for a few URLs. One process checks each URL on an interval, stores the result in a SQLite file, and serves a status page on your computer.
 
 ## What you get
 
@@ -8,13 +8,23 @@ A page at http://127.0.0.1:8787. The page is a form plus a table. You add a name
 
 ## Install and run
 
-nabd needs Python 3.11 or newer. It uses the standard library only. From this directory:
+nabd needs Python 3.11 or newer. It uses the standard library only, so no install step is needed. From this directory:
+
+Linux and macOS:
 
 ```text
-python -m nabd
+python3 -m nabd
 ```
 
-On this machine that printed:
+Windows (PowerShell or cmd):
+
+```text
+py -m nabd
+```
+
+On macOS, install Python 3.11 or newer from python.org or Homebrew (`brew install python`) if `python3 --version` is older. On Windows, install it from python.org and tick "Add python.exe to PATH".
+
+It prints:
 
 ```text
 listening on http://127.0.0.1:8787
@@ -42,7 +52,7 @@ The form has three fields:
 
 Submit runs `POST /add`. Each existing row has a Delete button, which posts that row's id to `POST /delete`.
 
-The smoke run added name `local`, url `http://127.0.0.1:50481/`, and interval `15`. That URL was a temporary process on this machine that answered `200` with the body `ok`. After the check, the row was:
+The smoke run added name `local`, url `http://127.0.0.1:50481/`, and interval `15`. That URL was a temporary local process that answered `200` with the body `ok`. After the check, the row was:
 
 ```text
 name      local
@@ -54,6 +64,10 @@ checked   2026-10-21 12:22:42
 ```
 
 `up 200` is the status cell: the target was up, and the HTTP code was 200. `41` is the latency in milliseconds. `2026-10-21 12:22:42` is the check time in UTC. The page's time column is headed `checked (UTC)`.
+
+## Safety
+
+The status page sends `X-Frame-Options: DENY` and `Content-Security-Policy: frame-ancestors 'none'`, so another site cannot load it in a frame. A check follows a redirect only when it points to `http` or `https`. A redirect to any other scheme, such as `file:` or `ftp:`, is not followed and the target is reported as down.
 
 ## Flags and files
 

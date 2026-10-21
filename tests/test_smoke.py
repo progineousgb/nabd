@@ -19,7 +19,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from nabd.server import Nabd, check_url, main
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -305,6 +304,50 @@ class SmokeTests(unittest.TestCase):
                 proc.wait(timeout=5)
         if proc.stdout is not None:
             proc.stdout.close()
+
+
+class _RedirectHandler(BaseHTTPRequestHandler):
+    target = "file:///etc/passwd"
+
+    def do_GET(self):
+        self.send_response(302)
+        self.send_header("Location", self.target)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def log_message(self, fmt, *args):
+        return
+
+
+class HardeningTests(unittest.TestCase):
+    def _serve(self, handler):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        return server.server_address[1]
+
+    def test_non_http_redirect_is_not_followed(self):
+        for target in ["file:///etc/passwd", "ftp://127.0.0.1/x"]:
+            handler = type("H", (_RedirectHandler,), {"target": target})
+            port = self._serve(handler)
+            result = check_url(f"http://127.0.0.1:{port}/")
+            self.assertFalse(result["up"], target)
+            self.assertEqual(result["status_code"], 302, target)
+
+    def test_dashboard_cannot_be_framed(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        app = Nabd(str(Path(tmp.name) / "nabd.db"), port=0)
+        self.addCleanup(app.close)
+        port = app.start()[1]
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/", headers={"Host": f"127.0.0.1:{port}"})
+        resp = conn.getresponse()
+        resp.read()
+        conn.close()
+        self.assertEqual(resp.getheader("X-Frame-Options"), "DENY")
+        self.assertIn("frame-ancestors 'none'", resp.getheader("Content-Security-Policy"))
 
 
 if __name__ == "__main__":

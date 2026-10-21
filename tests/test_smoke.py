@@ -221,6 +221,41 @@ class SmokeTests(unittest.TestCase):
         self.assertIn("nabd", page)
         self.assertIn("No monitors yet.", page)
 
+    def test_foreign_host_header_is_refused(self):
+        app = Nabd(self.db, port=0)
+        host, port = app.start()
+        self.addCleanup(app.close)
+        conn = http.client.HTTPConnection(host, port, timeout=5)
+        self.addCleanup(conn.close)
+        conn.request("GET", "/", headers={"Host": f"rebind.example:{port}"})
+        resp = conn.getresponse()
+        resp.read()
+        self.assertEqual(resp.status, 421)
+        conn.request("GET", "/", headers={"Host": f"localhost:{port}"})
+        resp = conn.getresponse()
+        resp.read()
+        self.assertEqual(resp.status, 200)
+
+    def test_huge_numbers_are_rejected(self):
+        app = Nabd(self.db)
+        self.addCleanup(app.close)
+        with self.assertRaises(ValueError):
+            app.add_monitor("big", "http://127.0.0.1/", "9" * 30)
+
+    def test_old_checks_are_pruned(self):
+        app = Nabd(self.db)
+        self.addCleanup(app.close)
+        monitor_id = app.add_monitor("gone", "http://127.0.0.1:9/", 15)
+        with app._lock:
+            app.conn.executemany(
+                "INSERT INTO checks (monitor_id, checked_at, latency_ms, up) VALUES (?, 0, 0, 0)",
+                [(monitor_id,)] * 300,
+            )
+            app.conn.commit()
+        app.tick()
+        count = app.conn.execute("SELECT COUNT(*) FROM checks").fetchone()[0]
+        self.assertLessEqual(count, 101)
+
     def _post(self, opener, url, fields):
         data = urllib.parse.urlencode(fields).encode()
         return opener.open(urllib.request.Request(url, data=data), timeout=5)

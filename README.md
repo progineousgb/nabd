@@ -38,7 +38,7 @@ The form has three fields:
 
 - `name`, required, at most 200 characters
 - `url`, required, and it must start with `http://` or `https://`
-- `interval`, required, a whole number of seconds, at least 15. The box starts at 60
+- `interval`, required, a whole number of seconds, from 15 to 604800 (one week). The box starts at 60
 
 Submit runs `POST /add`. Each existing row has a Delete button, which posts that row's id to `POST /delete`.
 
@@ -67,7 +67,7 @@ python -m nabd [--host 127.0.0.1] [--port 8787] [--db nabd.db]
 
 `GET /` is the status page. `GET /favicon.ico` returns 204. Anything else returns 404. The HTML includes `<meta http-equiv="refresh" content="15">`, so the browser reloads the page every 15 seconds and a later check shows up without a manual reload.
 
-A check is an HTTP GET. nabd waits at most 10 seconds. A status from 200 through 399 is up, and the cell reads `up` plus the code, as in `up 200`. An HTTP error status is down plus that code. When the connection fails, the cell reads `down`, there is no code, and the status element title holds the error text. The `ms` column is how long that GET took. The clock column is UTC, formatted `YYYY-MM-DD HH:MM:SS`. Until the first check finishes, the status cell reads `pending` and the latency and time cells are `-`.
+A check is an HTTP GET. nabd will check any address you give it, including ones on your local network, so only add URLs you mean to poll. nabd waits at most 10 seconds. A status from 200 through 399 is up, and the cell reads `up` plus the code, as in `up 200`. An HTTP error status is down plus that code. When the connection fails, the cell reads `down`, there is no code, and the status element title holds the error text. The `ms` column is how long that GET took. The clock column is UTC, formatted `YYYY-MM-DD HH:MM:SS`. Until the first check finishes, the status cell reads `pending` and the latency and time cells are `-`.
 
 A name is stored as UTF-8. The page sets `dir="auto"` on the name field and on the name cell.
 
@@ -81,4 +81,4 @@ python -m unittest discover -s tests -v
 
 The page shows only the latest check for each monitor. nabd has no accounts and no alerts. A failed check changes the row on this page and does nothing else: no mail, no webhook, no log line.
 
-The listener stays on localhost. A form post whose `Origin` or `Sec-Fetch-Site` marks it as cross-site is rejected with 403. The shortest interval is 15 seconds. Names over 200 characters and URLs over 2000 characters are rejected. Stopping the process leaves `nabd.db` in place.
+The listener stays on localhost, and a request whose `Host` header is not `127.0.0.1` or `localhost` gets 421, so a DNS rebinding page cannot read or change the list. A form post whose `Origin` or `Sec-Fetch-Site` marks it as cross-site is rejected with 403. The shortest interval is 15 seconds. Names over 200 characters and URLs over 2000 characters are rejected. Only the last 100 checks per monitor are kept in `nabd.db`. Stopping the process leaves the file in place.

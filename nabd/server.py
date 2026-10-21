@@ -10,6 +10,8 @@ from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 MIN_INTERVAL = 15
+MAX_INTERVAL = 7 * 24 * 3600
+KEEP_CHECKS = 100
 TIMEOUT = 10
 LOCAL_HOSTS = {"127.0.0.1", "localhost"}
 USER_AGENT = "nabd/0.1"
@@ -125,6 +127,8 @@ class Nabd:
             raise ValueError("url is too long")
         if interval < MIN_INTERVAL:
             raise ValueError(f"interval must be at least {MIN_INTERVAL} seconds")
+        if interval > MAX_INTERVAL:
+            raise ValueError(f"interval must be at most {MAX_INTERVAL} seconds")
         with self._lock:
             cur = self.conn.execute(
                 "INSERT INTO monitors (name, url, interval_sec) VALUES (?, ?, ?)",
@@ -199,6 +203,17 @@ class Nabd:
                         result["error"],
                     ),
                 )
+                # Only the latest check is shown, so keep a short tail per monitor.
+                self.conn.execute(
+                    """
+                    DELETE FROM checks
+                    WHERE monitor_id = ? AND id <= (
+                        SELECT id FROM checks WHERE monitor_id = ?
+                        ORDER BY id DESC LIMIT 1 OFFSET ?
+                    )
+                    """,
+                    (monitor_id, monitor_id, KEEP_CHECKS),
+                )
                 self.conn.commit()
 
     def _loop(self):
@@ -267,6 +282,9 @@ class Nabd:
             protocol_version = "HTTP/1.1"
 
             def do_GET(self):
+                if not _local_host(self.headers):
+                    self._send(421, b"unexpected Host header", "text/plain; charset=utf-8")
+                    return
                 path = urllib.parse.urlparse(self.path).path
                 if path == "/favicon.ico":
                     self._send(204, b"")
@@ -279,6 +297,10 @@ class Nabd:
 
             def do_POST(self):
                 path = urllib.parse.urlparse(self.path).path
+                if not _local_host(self.headers):
+                    self.close_connection = True
+                    self._send(421, b"unexpected Host header", "text/plain; charset=utf-8")
+                    return
                 if _cross_site(self.headers):
                     self.close_connection = True
                     self._send(403, b"cross-site request rejected", "text/plain; charset=utf-8")
@@ -307,7 +329,7 @@ class Nabd:
                             monitor_id = int(_field(form, "id"))
                         except ValueError as exc:
                             raise ValueError("missing monitor id") from exc
-                        if not app.delete_monitor(monitor_id):
+                        if not 0 < monitor_id < 2**63 or not app.delete_monitor(monitor_id):
                             self._send(404, b"no such monitor", "text/plain; charset=utf-8")
                             return
                     else:
@@ -341,6 +363,16 @@ class Nabd:
 def _field(form, name):
     values = form.get(name) or [""]
     return values[0]
+
+
+def _local_host(headers):
+    # A DNS rebinding page reaches us with its own name in Host.
+    host = (headers.get("Host") or "").strip().lower()
+    if host.startswith("["):
+        name = host[1:].split("]", 1)[0]
+    else:
+        name = host.rsplit(":", 1)[0] if ":" in host else host
+    return name in LOCAL_HOSTS
 
 
 def _cross_site(headers):
@@ -451,7 +483,7 @@ def render_page(rows):
   <form class="add" method="post" action="/add">
     <label>name <input name="name" required maxlength="200" dir="auto"></label>
     <label>url <input name="url" required type="url" placeholder="https://example.com"></label>
-    <label>interval <input name="interval" required type="number" min="15" step="1" value="60"></label>
+    <label>interval <input name="interval" required type="number" min="15" max="604800" step="1" value="60"></label>
     <button type="submit">Add</button>
   </form>
   <table>

@@ -1,23 +1,84 @@
-nabd is a local uptime monitor. One process stores results in `nabd.db` in the working directory and serves a status page.
+# nabd
 
-Run from this directory:
+nabd is a local uptime monitor for a few URLs. One process checks each URL on an interval, stores the result in a SQLite file, and serves a status page on your machine.
 
-```
+## What you get
+
+A page at http://127.0.0.1:8787. The page is a form plus a table. You add a name, an `http` or `https` URL, and how often to check it. After a check, the row shows the status, the HTTP code, the latency in milliseconds, and the time of that check in UTC.
+
+## Install and run
+
+nabd needs Python 3.11 or newer. It uses the standard library only. From this directory:
+
+```text
 python -m nabd
 ```
 
-The page is at http://127.0.0.1:8787. Add a name, an `http` or `https` URL, and an interval of at least 15 seconds. The table shows the last status, latency in milliseconds, and the check time in UTC. Delete removes a monitor. Each check waits at most 10 seconds. A network error counts as down.
+On this machine that printed:
 
-The process binds to localhost only. There are no accounts. Form posts from another site are rejected.
-
-Names are stored as UTF-8. The page sets `dir="auto"` on name fields so right-to-left text keeps its order.
-
-```
-python -m nabd --db nabd.db --port 8787
+```text
+listening on http://127.0.0.1:8787
 ```
 
-Tests:
+Leave that process running and open the URL in a browser on the same computer. Stop the process when you are done; it does not daemonize. Checks and monitors are stored in `nabd.db` in the working directory, so the next start loads the same list.
 
+The same defaults, written out:
+
+```text
+python -m nabd --db nabd.db --host 127.0.0.1 --port 8787
 ```
+
+## Example
+
+This was a local smoke run of the server on http://127.0.0.1:8787. The database was outside the repo, and the process was stopped at the end.
+
+Before anything was added, the table body was the text `No monitors yet.`
+
+The form has three fields:
+
+- `name`, required, at most 200 characters
+- `url`, required, and it must start with `http://` or `https://`
+- `interval`, required, a whole number of seconds, at least 15. The box starts at 60
+
+Submit runs `POST /add`. Each existing row has a Delete button, which posts that row's id to `POST /delete`.
+
+The smoke run added name `local`, url `http://127.0.0.1:50481/`, and interval `15`. That URL was a temporary process on this machine that answered `200` with the body `ok`. After the check, the row was:
+
+```text
+name      local
+url       http://127.0.0.1:50481/
+interval  15s
+status    up 200
+ms        41
+checked   2026-10-21 12:22:42
+```
+
+`up 200` is the status cell: the target was up, and the HTTP code was 200. `41` is the latency in milliseconds. `2026-10-21 12:22:42` is the check time in UTC. The page's time column is headed `checked (UTC)`.
+
+## Flags and files
+
+```text
+python -m nabd [--host 127.0.0.1] [--port 8787] [--db nabd.db]
+```
+
+- `--host` defaults to `127.0.0.1`. `localhost` is the other accepted value. Any other host is refused, the process exits 2, and the database file is not created.
+- `--port` is the listen port. The default is 8787, so the page is http://127.0.0.1:8787.
+- `--db` is the SQLite file. The default is `nabd.db` in the current directory.
+
+`GET /` is the status page. `GET /favicon.ico` returns 204. Anything else returns 404. The HTML includes `<meta http-equiv="refresh" content="15">`, so the browser reloads the page every 15 seconds and a later check shows up without a manual reload.
+
+A check is an HTTP GET. nabd waits at most 10 seconds. A status from 200 through 399 is up, and the cell reads `up` plus the code, as in `up 200`. An HTTP error status is down plus that code. When the connection fails, the cell reads `down`, there is no code, and the status element title holds the error text. The `ms` column is how long that GET took. The clock column is UTC, formatted `YYYY-MM-DD HH:MM:SS`. Until the first check finishes, the status cell reads `pending` and the latency and time cells are `-`.
+
+A name is stored as UTF-8. The page sets `dir="auto"` on the name field and on the name cell.
+
+From this directory, the tests are:
+
+```text
 python -m unittest discover -s tests -v
 ```
+
+## Limits
+
+The page shows only the latest check for each monitor. nabd has no accounts and no alerts. A failed check changes the row on this page and does nothing else: no mail, no webhook, no log line.
+
+The listener stays on localhost. A form post whose `Origin` or `Sec-Fetch-Site` marks it as cross-site is rejected with 403. The shortest interval is 15 seconds. Names over 200 characters and URLs over 2000 characters are rejected. Stopping the process leaves `nabd.db` in place.
